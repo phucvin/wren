@@ -249,3 +249,51 @@ For `super` calls (`CODE_SUPER_X`), the dispatch logic is slightly different:
 ```
 
 Here, `classObj` is explicitly the superclass (stored in the constants table of the current function), bypassing the receiver's class lookup. This ensures that the method lookup starts from the superclass.
+
+## 8. Field Access
+
+In Wren, fields are private to the class and are accessed by index, not name. This index is determined at compile time. The compiler maps each field name to a zero-based index for each class.
+
+There are two sets of opcodes for accessing fields: optimized access for `this` and general access.
+
+### Accessing `this` Fields
+
+When accessing a field on `this` (the current receiver), the compiler emits `CODE_LOAD_FIELD_THIS` or `CODE_STORE_FIELD_THIS`. These opcodes assume the receiver is already in stack slot 0 (which is always true for `this` in a method).
+
+```c
+// src/vm/wren_vm.c
+
+    CASE_CODE(LOAD_FIELD_THIS):
+    {
+      uint8_t field = READ_BYTE();
+      Value receiver = stackStart[0];
+      ASSERT(IS_INSTANCE(receiver), "Receiver should be instance.");
+      ObjInstance* instance = AS_INSTANCE(receiver);
+      ASSERT(field < instance->obj.classObj->numFields, "Out of bounds field.");
+      PUSH(instance->fields[field]);
+      DISPATCH();
+    }
+```
+
+This is highly efficient because it avoids pushing `this` onto the stack before the operation.
+
+### General Field Access
+
+If `this` is not in slot 0 (for example, if it's captured in a closure), the compiler emits code to load the receiver onto the stack, followed by `CODE_LOAD_FIELD` or `CODE_STORE_FIELD`.
+
+```c
+// src/vm/wren_vm.c
+
+    CASE_CODE(LOAD_FIELD):
+    {
+      uint8_t field = READ_BYTE();
+      Value receiver = POP();
+      ASSERT(IS_INSTANCE(receiver), "Receiver should be instance.");
+      ObjInstance* instance = AS_INSTANCE(receiver);
+      ASSERT(field < instance->obj.classObj->numFields, "Out of bounds field.");
+      PUSH(instance->fields[field]);
+      DISPATCH();
+    }
+```
+
+This instruction pops the receiver from the stack, verifies it's an instance, and accesses the field array using the index operand. Since fields are private, this opcode is only used when the compiler can prove that the object on the stack is indeed the instance that owns the field (e.g. `this` inside a closure).
